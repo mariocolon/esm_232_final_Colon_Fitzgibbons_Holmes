@@ -1,0 +1,345 @@
+---
+title: "ESM_232_SnowMelt_Model_Colon_Fitzgibbons_Holmes"
+author: "Mario Colon, Paige Fitzgibbons, Eric Holmes"
+date: "June 2, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##Problem Statement
+
+###The Sierra Nevada mountains are a crucial resource for water users from the Central Valley down to the megalopolises of southern California. A key attribute that separates high alpine headwaters from other water resources like ground water is the compounding of unknowns. How much water is stored in the Sierra snowpack, when will it begin to melt, how quickly will it melt, and when do we expect the snow to be completely melted? The use of an energy balance model can help address all the aforementioned questions. The following model focuses on a single research question:
+
+
+###*How much energy is required to produce runoff from a snowpack?*
+
+
+###While this is only a facet of managing water resources from a snow-fed watershed it’s an important indicator of when water will begin to meander down from headwaters.
+
+###Library Load
+
+```{r}
+
+library(tidyverse)
+library(reshape2)
+
+```
+###Load in data
+
+Primary data was collected from the CUES snow observatory on Mammoth Mountain, CA. Data for subsequent spatial analysis was downloaded from NRCS snow pillows located in the central Sierra at Squaw Valley, Leavitt Lake, Leavitt Meadows, and Burnside.
+
+The date range of April 1st-April 30th was selected for two primary reasons. Firstly, April 1st is when peak SWE is recorded in the Sierra Nevada and this date is a consistent marker for true peak SWE. Secondly, April represents when California mountains transition from accumulation to melt season, and therefore will generate the most dynamic model results. These results will have greatest fidelity if captured on hourly timesteps and that is why our model runs with approximately 720 data points for each location
+
+
+```{r}
+
+snow_inputs <- read_csv("Inputs.csv")
+
+```
+
+###Load three models
+
+```{r}
+
+source("model_1_warm.R")
+source("model_2_ripe.R")
+source("model_3_output.R")
+
+```
+
+
+##Model Discussion
+
+###The model is composed of three sub-models which then are summed to produce the final necessary energy input to produce runoff from a given snowpack.
+
+###*Model 1 - Warming Phase*
+
+The warming phase describes the energy input that is required to bring the snow surface to 0oC, or its melting point. Of course, snow can’t get warmer than 0oC because this results in a phase change producing water and therefore the model assess only up to the specific value of 0oC. Snow surface temperature is a product of several heat fluxes (sensible, latent, shortwave, and reradiated longwave) this model chooses to simplify the process by directly observing snow surface temperature rather than accounting for all fluxes. Furthermore, confounds such as shifting albedo and snow grain shape (crystalline vs wet/rounded structure) and size are not accounted for. Lastly, any snowpack has an inherent cold content that needs to be overcome for melt, and this is described though snowpack water equivalent (SWE), density of water, and the heat capacity of ice.
+
+```{r}
+
+warm <- snow_warm(hm = snow_inputs$SWECM, Ts = snow_inputs$`snow surface temperatureC`, ci = 2101, pw = 1000, Tm = 0)
+
+warm = as.data.frame(warm)
+
+warm$time = c(seq(from = 1, to = 696))
+
+
+ggplot(warm, aes(time, warm)) + 
+  geom_line(col = "purple") +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirment for Warming Phase")
+
+
+
+```
+
+
+
+###*Model 2 - Ripening Phase*
+
+The ripening phase describes the continued energy input needed to melt snow and saturate the snowpack. Snowpack is a porous media and has an intrinsic volumetric liquid water holding capacity. Filling these pores with water is called ripening and can vary from one snowpack to another. The characteristics of the porousness is always changing with energy imbalances that drives snow faceting, sublimation, and sintering. Again, porousness is directly observed in this phase to simplify the model and uniformly applied through the snowpack ignoring natural layering. Finally, the internal latent heat of fusion must be accounted for as warm water initiates phase changes under the surface of the snowpack. 
+
+
+```{r}
+
+ripe <- snow_ripe(hs = snow_inputs$`snow depthCM`, porosity = .49, theta = 0.03, pw = 1000, lambda = 0.334, pi = 917)
+
+ripe = as.data.frame(ripe)
+
+ripe$time = c(seq(from = 1, to = 696))
+
+
+ggplot(ripe, aes(time, ripe)) + 
+  geom_line(col = "cyan") +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirment for Ripeing Phase")
+
+```
+
+
+###*Model 3 - Output Phase*
+
+The output phase covers further energy input that produces water output like runoff, infiltration or evaporation. Just like soils there is a water retention that is unique to different snowpack characteristics which must be described and accounted for as water percolates from the top of the snowpack to the bottom and finally exits as output.
+
+```{r}
+
+
+output <- snow_output(hm = snow_inputs$SWECM, hwret = 0.03, pw = 1000, lambda = 0.334)
+
+output = as.data.frame(output)
+
+output$time = c(seq(from = 1, to = 696))
+
+ggplot(output, aes(time, output)) + 
+  geom_line(col = "purple") +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirment for Output Phase")
+
+```
+
+###Energy Combination for CUES only 
+
+```{r}
+
+combination_warm_ripe <- merge(warm, ripe, by ="time")
+final_combo <- merge(combination_warm_ripe, output, by = "time")
+
+final_combo$energy = final_combo$warm + final_combo$ripe + final_combo$output
+
+ggplot(final_combo, aes(time, energy)) + 
+  geom_line(col = "cyan") +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirment for Overall Snowmelt CUES")
+
+```
+
+###Sensitivity Analysis
+
+A sensitivity analysis was conducted to test the impact of (1) climate change and (2) change in porosity to the ripening phase
+
+###Climate Change 
+
+###Data change i.e. 3 degrees (C) to snow surface temp
+
+```{r}
+
+snow_inputs$temp_low = snow_inputs$`snow surface temperatureC` - 3 
+snow_inputs$temp_high = snow_inputs$`snow surface temperatureC` + 3
+
+warm_low <- snow_warm(hm = snow_inputs$SWECM, Ts = snow_inputs$temp_low, ci = 2101, pw = 1000, Tm = 0)
+warm_high <- snow_warm(hm = snow_inputs$SWECM, Ts = snow_inputs$temp_high, ci = 2101, pw = 1000, Tm = 0)
+
+warm_low = as.data.frame(warm_low)
+warm_high = as.data.frame(warm_high)
+
+warm_low$time = c(seq(from = 1, to = 696))
+warm_high$time = c(seq(from = 1, to = 696))
+
+combination_warm <- merge(warm, warm_high, by ="time")
+final_combo_warm <- merge(combination_warm, warm_low, by = "time")
+
+
+ggplot(final_combo_warm, aes(time)) + 
+  geom_line(aes(y = warm, col = "warm")) +
+  geom_line(aes(y = warm_low, col = "warm_low")) +
+  geom_line(aes(y = warm_high, col = "warm_high")) +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirment for Warming Phase with +/- 3C") +
+  labs(colour = "Scenarios")
+  
+```
+
+Result from climate sensitivity analysis shows that as temperature warm, there is an overall less energy needed to complete the warming phase. By that same reasoning, as temperatures cool, more energy is needed to complete the warming phase. 
+
+###Change in Porosity 
+
+###Porosity change +/- .10 and theta change +/- .02
+
+```{r}
+
+
+ripe_low <- snow_ripe(hs = snow_inputs$`snow depthCM`, porosity = .39, theta = 0.01, pw = 1000, lambda = 0.334, pi = 917)
+ripe_high <- snow_ripe(hs = snow_inputs$`snow depthCM`, porosity = .59, theta = 0.05, pw = 1000, lambda = 0.334, pi = 917)
+
+
+ripe_low = as.data.frame(ripe_low)
+ripe_high = as.data.frame(ripe_high)
+
+ripe_low$time = c(seq(from = 1, to = 696))
+ripe_high$time = c(seq(from = 1, to = 696))
+
+combination_ripe <- merge(ripe, ripe_high, by ="time")
+final_combo_ripe <- merge(combination_ripe, ripe_low, by = "time")
+
+ggplot(final_combo_ripe, aes(time)) + 
+  geom_line(aes(y = ripe, col = "ripe")) +
+  geom_line(aes(y = ripe_low, col = "ripe_low")) +
+  geom_line(aes(y = ripe_high, col = "ripe_high")) +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirment for Ripeing Phase with \n +/- .10 Porosity and +/- .02 Liquid Water Equivalent") +
+  labs(colour = "Scenarios")
+  
+
+
+
+```
+
+By adjusting the porosity and the LWQ of the snowpack, we see an interesting shift in the energy required to complete the ripening phase. Specifically, as snow become more porous and has a higher LWQ, we see a general increase in energy required to complete the ripening phase as we move through the time series and snow depth changes from day to day. A lower range of energy is required when the snow is less porous and with lower LWQ. 
+
+###Spatial Analysis
+
+To determine how the energy input requirement to warm a snowpack changes spatially, three additional sites were analyzed. The snowpack SWE data for these location was collected from the National Weather and Climate Center from their SNOTEL monitoring sites. The first site analyzed was at Squaw Valley ski resort, located at 8,013 ft. in elevation. The SWE at this site measured 159.8cm on April 1st. The next site analyzed was Leavitt Meadows, at an elevation of 7,198ft. The SWE at this site was 13.7cm on April 1st, reflecting the location’s warmer climate and low altitude. The final site analyzed was Burnside, located at an elevation of 8,129 ft. The SWE at this site was 111.3cm. Energy input requirement was calculated based on snow surface temperature, SWE, and elevation. The highest energy input requirement was at CUES, which is the coldest site at the highest elevation. The lowest energy requirement was at Leavitt Meadows, which was the warmest site at the lowest elevation. The spatial analysis illustrated the changes in energy requirement to warm a snow pack as one travels up and down the mountain and as one varies the size of their original snowpack. 
+
+Squaw Valley
+
+```{r squaw}
+
+squaw <- read_csv("squaw.csv")
+warm_squaw <- snow_warm(hm = squaw$squaw_swe_cm
+, Ts = squaw$squaw_snowtemp, ci = 2101, pw = 1000, Tm = 0)
+
+warm_squaw = as.data.frame(warm_squaw)
+
+warm_squaw$time = c(seq(from = 1, to = 696))
+
+
+ggplot(warm_squaw, aes(time, warm_squaw)) + 
+  geom_line(col = "magenta") +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirement for Warming Phase\nSquaw Valley")
+
+```
+
+Leavitt Meadows
+
+```{r leavittil}
+
+leavit <- read_csv("leavittil.csv")
+warm_leavit <- snow_warm(hm = leavit$leavit_swe_cm, Ts = leavit$leavitt_snowtemp, ci = 2101, pw = 1000, Tm = 0)
+
+warm_leavit = as.data.frame(warm_leavit)
+
+warm_leavit$time = c(seq(from = 1, to = 696))
+
+
+ggplot(warm_leavit, aes(time, warm_leavit)) + 
+  geom_line(col = "blue") +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirement for Warming Phase\nLeavitt Meadows")
+
+```
+
+Burnside
+
+```{r}
+burnside <- read_csv("burnside.csv")
+warm_burnside <- snow_warm(hm = burnside$burnside_SWE_cm, Ts = burnside$burnside_snowtemp, ci = 2101, pw = 1000, Tm = 0)
+
+warm_burnside = as.data.frame(warm_burnside)
+
+warm_burnside$time = c(seq(from = 1, to = 696))
+
+
+ggplot(warm_burnside, aes(time, warm_burnside)) + 
+  geom_line(col = "darkgreen") +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirement for Warming Phase\nBurnside")
+
+```
+
+
+Line Graph
+
+```{r}
+spatial1 <- merge(warm, warm_burnside, by="time")
+spatial2 <- merge(warm_squaw, warm_leavit, by="time")
+spatial_final <- merge(spatial1, spatial2, by="time")
+
+ggplot(spatial_final, aes(time)) + 
+  geom_line(aes(y = warm, col = "Cues")) +
+  geom_line(aes(y = warm_squaw, col = "Squaw Valley")) +
+  geom_line(aes(y = warm_burnside, col = "Burnside")) +
+  geom_line(aes(y = warm_leavit, col = "Leavitt Meadow")) +
+  theme_classic() + 
+  ylab("Energy Required (J m-2)") +
+  xlab("Time Step") +
+  ggtitle("Energy Requirment for Ripeing Phase Across\nVarious Sierra Nevada Snowpacks") +
+  labs(colour = "Snowpack")
+```
+
+
+
+Bar Graph
+
+```{r Plot}
+
+
+Cues <- max(spatial_final$warm, na.rm=TRUE)
+Squaw <- max(spatial_final$warm_squaw, na.rm=TRUE)
+Burnside <- max(spatial_final$warm_burnside, na.rm=TRUE)
+Leavitt <- max(spatial_final$warm_leavit, na.rm=TRUE)
+
+
+Location <- c('Cues','Squaw', 'Burnside', 'Leavitt')
+Energy <- c(7795845380, 6537269904, 4329858456, 479221292)
+
+max_e <- data.frame(Location, Energy)
+
+
+
+ggplot(max_e, aes(x = Location, y=Energy, fill=Location)) + 
+  geom_bar(stat="identity") +
+  theme_classic() + 
+  ylab("Maximum Energy Required (J m-2)") +
+  xlab("Snow Survey Location") +
+  ggtitle("Maximum Energy Input Requirment for Warming Phase Across\nVarious Sierra Nevada Snowpacks") +
+  labs(colour = "Snowpack")
+
+
+
+
+```
+
